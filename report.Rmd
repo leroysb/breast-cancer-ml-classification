@@ -1,0 +1,191 @@
+---
+title: "BUILDING A MACHINE LEARNING MODEL THAT CLASSIFIES BREAST CANCER RESULTS"
+author: "Leroy Buliro"
+date: "1/11/2020"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. INTRODUCTION
+
+In this project, we use breast cancer biopsy data provided by UCI to build a classification machine learning model with the aim of distinguishing between a malignant and benign breast mass.
+
+The dataset consists of two outcomes in the y label:
+- "M" denoting a malignant breast mass (cancer detected)
+- "B" denoting a benign breast mass (no cancer detected)
+
+And predictors in the x label consisting of means, standard errors and worst values of each 10 nuclear measurements. A total of 30 features per biopsy.
+
+The steps followed include:
+- Preparation of the work environment.
+- Preparation, exploration and visualizations of the data.
+- Analysis of the predictors
+- Model selection.
+
+
+## 2. METHODS AND ANALYSIS
+
+### 2.1 Work Environment and Data Preparation
+
+We are going to use the following libraries:
+
+```{r message=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", 
+                                         repos = "http://cran.us.r-project.org")
+if(!require(dslabs)) install.packages("dslabs", 
+                                     repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", 
+                                     repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", 
+                                      repos = "http://cran.us.r-project.org")
+if(!require(knitr)) install.packages("knitr", 
+                                     repos = "http://cran.us.r-project.org")
+if(!require(rmarkdown)) install.packages("rmarkdown", 
+                                         repos = "http://cran.us.r-project.org")
+```
+
+The dataset we are going to use to train our model is contained in the dslabs package so we shall proceed by loading the data using the code
+
+```{r}
+data(brca)
+```
+
+
+### 2.2 Data Exploration, Analysis and Visualizations
+
+The dataset contains predictors(x) and outcomes(y), where:
+
+The outcomes are 
+```{r}
+unique(brca$y)
+```
+
+with **357** benign observations and **212** malignant observations
+```{r}
+table(brca$y)
+```
+
+And the predictors which are in a matrix consist of the mean, standard error and worst value of 10 nuclear measurements on the slide per biopsy
+```{r}
+head(brca$x)
+```
+
+A total of **569** observations and **30** features
+```{r}
+dim(brca$x)
+```
+
+Before proceeding, we split our data into training and test sets. In this project, we shall use 80% of the data to train our model and the remaining to test our final model
+```{r message=FALSE}
+set.seed(1)
+test_index <- createDataPartition(y =  brca$y, times = 1, p = 0.2, list = FALSE)
+
+
+y <- droplevels(brca$y[-test_index])
+x <- brca$x[-test_index, ]
+brca_train_set <- data.frame(x,y)
+write.csv(brca_train_set, file = "data/brca_train_set.csv")
+
+y2 <- droplevels(brca$y[test_index])
+x2 <- brca$x[test_index, ]
+brca_test_set <- data.frame(x2,y2)
+write.csv(brca_test_set, file = "data/brca_test_set.csv")
+```
+
+From the visualization below, we can conclude that **area_worst** and **area_mean** are the two features driving our algorithm.
+
+```{r echo=FALSE}
+# Fit LDA model and measure Accuracy
+train_lda <- train(x, y, method = "lda")
+
+# Which features appear to be driving the algorithm?
+t(train_lda$finalModel$means) %>% data.frame() %>%
+  mutate(predictor_name = rownames(.)) %>%
+  ggplot(aes(B, M, label = predictor_name)) +
+  geom_point() +
+  geom_text() +
+  geom_abline()
+```
+
+
+```{r echo=FALSE}
+# Fit QDA model and measure Accuracy
+train_qda <- train(x, y, method = "qda")
+
+d <- apply(train_qda$finalModel$means, 2, diff)
+ind <- order(abs(d), decreasing = TRUE)[1:2]
+plot(x[, ind], col = y)
+```
+
+
+### 2.3 Data Modelling
+
+From the data visualizations and observations, it is evident that this is a categorical outcome since y can be malignant or benign with 30 predictors. We will therefore fit a linear model applying a model ensemble and select the best performing based on accuracy. For this, we shall use the caret package which is already preloaded.
+
+```{r message=FALSE, warning=FALSE}
+# Apply model ensemble
+
+models <- c("glm", "lda", "naive_bayes", "svmLinear", "knn", 
+            "gamLoess", "multinom", "qda", "rf", "adaboost")
+
+fits <- lapply(models, function(model){ 
+  train(y ~ ., method = model, data = brca_train_set)
+  }) 
+
+names(fits) <- models
+```
+
+Now we assume we don't have the outcomes of the test data and apply the model to predict the outcome, after which we shall review which model returns the highest accuracy based on the actual outcome.
+
+```{r warning=FALSE}
+# Create a matrix of predictions for the test set
+pred <- sapply(fits, function(object) 
+  predict(object, newdata = brca_test_set))
+
+acc <- colMeans(pred == brca_test_set$y2)
+
+model_result <- data.frame(METHOD = models, ACCURACY = acc)
+model_result
+```
+
+The model ensemble accuracy average is **95.1%**
+```{r warning=FALSE}
+model_result <- bind_rows(model_result, data_frame
+                          (METHOD="ensemble average", ACCURACY = mean(acc)))
+mean(acc)
+```
+
+Now we build an ensemble prediction based by majority vote of the first 10 models.
+We obtain an accuracy of **96.5%**
+```{r }
+# build an ensemble prediction by majority vote and compute the accuracy of the ensemble.
+votes <- rowMeans(pred == "M")
+y_hat <- ifelse(votes > 0.5, "M", "B")
+mean(y_hat == brca_test_set$y2)
+model_result <- bind_rows(model_result, data_frame(
+  METHOD="ensemble majority vote", ACCURACY = mean(y_hat == brca_test_set$y2)))
+
+```
+
+
+## 3. RESULT
+
+Here is a list of all models with their individual accuracy
+```{r echo=FALSE}
+model_result %>% knitr::kable()
+```
+
+We have two models that perform better than the ensemble
+```{r}
+ind <- acc > mean(y_hat == brca_test_set$y2)
+models[ind]
+```
+
+
+## 4. CONCLUSION
+
+The main objective of the project was to come up with a model that will best predict the right outcome based on the features, in this case, accuracy of the model. We were able to conclude that the best two models are **Linear Discriminant Analysis (lda)** and **Multinomial Log-linear (multinom)** with accuracy **97.4%** and **98.3%** respectively. Can we further tune parameters of the two models and evaluate which returns a more accurate prediction? Research worth exploring.
+
